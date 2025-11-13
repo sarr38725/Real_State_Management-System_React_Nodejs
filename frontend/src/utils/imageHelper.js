@@ -1,18 +1,13 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const SERVER_BASE_URL = API_BASE_URL.replace('/api', '');
 
-export const getImageUrl = (imagePath) => {
-  if (!imagePath) return null;
+export const getImageUrl = (imageId) => {
+  if (!imageId) return null;
 
-  if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-    return imagePath;
+  if (typeof imageId === 'string' && (imageId.startsWith('http://') || imageId.startsWith('https://'))) {
+    return imageId;
   }
 
-  if (imagePath.startsWith('/uploads')) {
-    return `${SERVER_BASE_URL}${imagePath}`;
-  }
-
-  return `${SERVER_BASE_URL}/uploads/properties/${imagePath}`;
+  return `${API_BASE_URL}/images/${imageId}`;
 };
 
 export const getImageUrls = (images) => {

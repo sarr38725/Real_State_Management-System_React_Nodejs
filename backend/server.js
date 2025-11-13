@@ -7,6 +7,7 @@ const authRoutes = require('./routes/authRoutes');
 const propertyRoutes = require('./routes/propertyRoutes');
 const scheduleRoutes = require('./routes/scheduleRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
+const imageRoutes = require('./routes/imageRoutes');
 const db = require('./config/database');
 
 const app = express();
@@ -50,6 +51,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/properties', propertyRoutes);
 app.use('/api/schedules', scheduleRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/images', imageRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack);

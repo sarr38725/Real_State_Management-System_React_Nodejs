@@ -7,7 +7,7 @@ const {
   deleteProperty
 } = require('../controllers/propertyController');
 const { authenticate, authorize } = require('../middleware/auth');
-const upload = require('../middleware/upload'); // <-- Multer middleware
+const { upload } = require('../middleware/uploadToDb'); // <-- Multer middleware
 
 const router = express.Router();
 

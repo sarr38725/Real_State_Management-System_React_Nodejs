@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('../config/database');
+const { saveImageToDb } = require('../middleware/uploadToDb');
 
 /** ---------- helpers ---------- */
 
@@ -92,12 +93,12 @@ const getAllProperties = async (req, res) => {
     const propertiesWithImages = await Promise.all(
       properties.map(async (property) => {
         const [images] = await db.query(
-          'SELECT image_url FROM property_images WHERE property_id = ? ORDER BY is_primary DESC, id ASC',
+          'SELECT id FROM property_images WHERE property_id = ? ORDER BY is_primary DESC, id ASC',
           [property.id]
         );
         return {
           ...property,
-          images: images && images.length > 0 ? images.map(img => img.image_url) : []
+          images: images && images.length > 0 ? images.map(img => img.id) : []
         };
       })
     );
@@ -123,14 +124,14 @@ const getPropertyById = async (req, res) => {
     }
 
     const [images] = await db.query(
-      'SELECT image_url FROM property_images WHERE property_id = ? ORDER BY is_primary DESC, id ASC',
+      'SELECT id FROM property_images WHERE property_id = ? ORDER BY is_primary DESC, id ASC',
       [req.params.id]
     );
 
     res.json({
       property: {
         ...properties[0],
-        images: images && images.length > 0 ? images.map(img => img.image_url) : []
+        images: images && images.length > 0 ? images.map(img => img.id) : []
       }
     });
   } catch (error) {
@@ -169,16 +170,14 @@ const createProperty = async (req, res) => {
 
     const propertyId = result.insertId;
 
-    // New uploads if any (when multipart)
-    const uploadedUrls = (req.files || []).map(f => `/uploads/properties/${f.filename}`);
-    const incomingImages = ensureArray(images);
-    const finalImages = [...incomingImages, ...uploadedUrls];
-
-    if (finalImages.length > 0) {
-      for (let i = 0; i < finalImages.length; i++) {
-        await db.query(
-          'INSERT INTO property_images (property_id, image_url, is_primary) VALUES (?, ?, ?)',
-          [propertyId, finalImages[i], i === 0]
+    // Save uploaded images to database
+    if (req.files && req.files.length > 0) {
+      for (let i = 0; i < req.files.length; i++) {
+        await saveImageToDb(
+          propertyId,
+          req.files[i].buffer,
+          req.files[i].mimetype,
+          i === 0
         );
       }
     }
@@ -235,76 +234,49 @@ const updateProperty = async (req, res) => {
 
     /** ---------- images update logic ---------- */
 
-    // 1) New uploads from multipart
-    const uploadedUrls = (req.files || []).map(f => `/uploads/properties/${f.filename}`);
-
-    // 2) Normalize arrays
-    const existingImages = ensureArray(images);         // what remains visible on client before submit
-    const toRemove = ensureArray(imagesToRemove);       // explicit removals
+    // Normalize arrays
+    const existingImages = ensureArray(images);         // image IDs still kept
+    const toRemove = ensureArray(imagesToRemove);       // image IDs to remove
     const doReplace = toBool(replaceImages);
 
     if (doReplace) {
-      // a) delete ALL DB rows for this property (and try to delete local files for previous images)
-      const [oldImgsRows] = await db.query(
-        'SELECT image_url FROM property_images WHERE property_id = ?',
-        [propertyId]
-      );
-      for (const row of oldImgsRows) {
-        tryDeleteLocalByUrl(row.image_url);
-      }
+      // Delete ALL images for this property
       await db.query('DELETE FROM property_images WHERE property_id = ?', [propertyId]);
 
-      // b) Insert only the newly uploaded files
-      const finalImages = uploadedUrls; // replace == only new uploads
-      for (let i = 0; i < finalImages.length; i++) {
-        await db.query(
-          'INSERT INTO property_images (property_id, image_url, is_primary) VALUES (?, ?, ?)',
-          [propertyId, finalImages[i], i === 0]
-        );
+      // Insert only the newly uploaded files
+      if (req.files && req.files.length > 0) {
+        for (let i = 0; i < req.files.length; i++) {
+          await saveImageToDb(
+            propertyId,
+            req.files[i].buffer,
+            req.files[i].mimetype,
+            i === 0
+          );
+        }
       }
     } else {
-      // Selective remove + merge with new uploads
-
-      // a) Delete rows marked as removed + try delete files
+      // Selective remove
       if (toRemove.length > 0) {
-        for (const url of toRemove) {
-          tryDeleteLocalByUrl(url);
-        }
         await db.query(
-          `DELETE FROM property_images WHERE property_id = ? AND image_url IN (${toRemove.map(() => '?').join(',')})`,
+          `DELETE FROM property_images WHERE property_id = ? AND id IN (${toRemove.map(() => '?').join(',')})`,
           [propertyId, ...toRemove]
         );
       }
 
-      // b) Ensure any remaining existingImages are present in DB (idempotent upsert-ish)
-      //    To avoid duplicates, we read current and insert only missing ones.
-      const [currentRows] = await db.query(
-        'SELECT image_url FROM property_images WHERE property_id = ?',
-        [propertyId]
-      );
-      const currentSet = new Set(currentRows.map(r => r.image_url));
-      const toKeepInsert = existingImages.filter(u => !currentSet.has(u));
-
-      for (const url of toKeepInsert) {
-        await db.query(
-          'INSERT INTO property_images (property_id, image_url, is_primary) VALUES (?, ?, ?)',
-          [propertyId, url, false]
-        );
-      }
-
-      // c) Insert newly uploaded files
-      if (uploadedUrls.length > 0) {
-        // If there are no images at all after operations, mark first new as primary
+      // Insert newly uploaded files
+      if (req.files && req.files.length > 0) {
         const [afterRows] = await db.query(
           'SELECT COUNT(*) as cnt FROM property_images WHERE property_id = ?',
           [propertyId]
         );
         const countBefore = Number(afterRows[0].cnt) || 0;
 
-        for (let i = 0; i < uploadedUrls.length; i++) {
-          await db.query(
-            'INSERT INTO property_images (property_id, image_url, is_primary) VALUES (?, ?, ?)',
-            [propertyId, uploadedUrls[i], (countBefore === 0 && i === 0)]
+        for (let i = 0; i < req.files.length; i++) {
+          await saveImageToDb(
+            propertyId,
+            req.files[i].buffer,
+            req.files[i].mimetype,
+            countBefore === 0 && i === 0
           );
         }
       }
@@ -330,9 +302,7 @@ const deleteProperty = async (req, res) => {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    // delete images rows & try to delete files
-    const [imgs] = await db.query('SELECT image_url FROM property_images WHERE property_id = ?', [propertyId]);
-    for (const row of imgs) tryDeleteLocalByUrl(row.image_url);
+    // delete all images for this property
     await db.query('DELETE FROM property_images WHERE property_id = ?', [propertyId]);
 
     await db.query('DELETE FROM properties WHERE id = ?', [propertyId]);
